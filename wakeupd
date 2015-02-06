@@ -1,0 +1,6 @@
+import sys
+
+from wakeupdaemon import main
+
+
+sys.exit(main.main())
