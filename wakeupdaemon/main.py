@@ -1,3 +1,4 @@
+import ConfigParser
 import logging
 import optparse
 import os
@@ -49,6 +50,11 @@ class HostState(object):
             self._last_seen and information_age or 'never')
 
     def wake(self, requester):
+        LOG.warning('Unable to wake %s' % self._alias)
+
+
+class HostStateWOL(HostState):
+    def wake(self, requester):
         LOG.warning('Waking %s for %s' % (self._alias, requester))
         if self._interface:
             intfarg = '-i %s' % self._interface
@@ -61,6 +67,11 @@ class HostState(object):
             LOG.error('Failed to wake %s' % (self._alias))
 
 
+HOST_TYPES = {
+    'wol': HostStateWOL,
+}
+
+
 def update_timers(watches, arp_frame):
     seen = []
     for ip, state in watches.items():
@@ -68,6 +79,46 @@ def update_timers(watches, arp_frame):
             state.seen_alive()
         state.ping()
     return bool(seen)
+
+
+def load_hosts_from_conf(conf):
+    def safe(fn, section, option, default):
+        try:
+            fn(section, option)
+        except ConfigParser.NoOptionError:
+            return default
+
+    hosts = []
+    for hostdef in filter(lambda n: n.startswith('host:'), conf.sections()):
+        _, name = hostdef.split(':')
+        hosttype = safe(conf.get, hostdef, 'type', 'wol')
+        if hosttype not in HOST_TYPES:
+            raise Exception('Host %s has invalid type %s' % (name, hosttype))
+        state = HOST_TYPES[hosttype](
+            conf.get(hostdef, 'ip'), name,
+            safe(conf.get, hostdef, 'interface', None),
+            safe(conf.getint, hostdef, 'timeout', 90))
+        hosts.append(state)
+    return hosts
+
+
+def load_hosts_from_args(args):
+    hosts = []
+    for arg in args:
+        try:
+            ip, name = arg.split(':')
+            iface = None
+        except ValueError:
+            ip, name, iface = arg.split(':')
+        hosts.append(HostStateWOL(ip, name, interface=iface))
+    return hosts
+
+
+def load_hosts(conf, args):
+    hosts = []
+    hosts += load_hosts_from_conf(conf)
+    hosts += load_hosts_from_args(args)
+    return hosts
 
 
 def main():
@@ -83,9 +134,16 @@ def main():
                       type='int')
     options, args = parser.parse_args()
 
-    if len(args) == 0:
-        print 'Arguments are required in the form of ip:hostname'
+    conf = ConfigParser.ConfigParser()
+    conf_file = os.path.expanduser(os.path.join('~', '.wakeupd'))
+    if os.path.exists(conf_file):
+        conf.read(conf_file)
+
+    hosts = load_hosts(conf, args)
+    if len(hosts) == 0:
+        print 'No hosts are defined'
         return 1
+    watches = dict([(host._ip, host) for host in hosts])
 
     logging.basicConfig(format='%(asctime)-15s %(levelname)s %(message)s')
     LOG = logging.getLogger()
@@ -97,21 +155,6 @@ def main():
     else:
         LOG.setLevel(logging.WARNING)
 
-    watches = {}
-
-    for arg in args:
-        if ':' not in arg:
-            print '`%s\' is not in valid ip:hostname[:iface] format'
-            return 1
-        try:
-            ip, hostname = arg.split(':')
-            iface = None
-        except ValueError:
-            ip, hostname, iface = arg.split(':')
-
-        watches[ip] = HostState(ip, hostname, interface=iface,
-                                timeout=options.timeout)
-        LOG.debug('Watching %s' % watches[ip])
 
     sock = arp.ArpSocket()
 
