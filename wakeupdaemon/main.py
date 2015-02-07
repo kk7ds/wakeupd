@@ -55,14 +55,14 @@ class HostState(object):
 
 class HostStateWOL(HostState):
     def wake(self, requester):
-        LOG.warning('Waking %s for %s' % (self._alias, requester))
+        LOG.warning('Waking %s for %s with WOL' % (self._alias, requester))
         if self._interface:
             intfarg = '-i %s' % self._interface
         else:
             intfarg = ''
-        r = subprocess.call('etherwake %s %s' % (intfarg,
-                                                 self._alias),
-                            shell=True)
+        cmd = 'etherwake %s %s' % (intfarg, self._alias)
+        LOG.debug('Using command %s' % repr(cmd))
+        r = subprocess.call(cmd, shell=True)
         if r != 0:
             LOG.error('Failed to wake %s' % (self._alias))
 
@@ -84,7 +84,7 @@ def update_timers(watches, arp_frame):
 def load_hosts_from_conf(conf):
     def safe(fn, section, option, default):
         try:
-            fn(section, option)
+            return fn(section, option)
         except ConfigParser.NoOptionError:
             return default
 
@@ -96,8 +96,8 @@ def load_hosts_from_conf(conf):
             raise Exception('Host %s has invalid type %s' % (name, hosttype))
         state = HOST_TYPES[hosttype](
             conf.get(hostdef, 'ip'), name,
-            safe(conf.get, hostdef, 'interface', None),
-            safe(conf.getint, hostdef, 'timeout', 90))
+            interface=safe(conf.get, hostdef, 'interface', None),
+            timeout=safe(conf.getint, hostdef, 'timeout', 90))
         hosts.append(state)
     return hosts
 
