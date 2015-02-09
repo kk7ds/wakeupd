@@ -17,6 +17,7 @@ class HostState(object):
         self._timeout = timeout
         self._last_seen = 0
         self._last_ping = 0
+        self._was_alive = False
 
     def ping(self):
         information_age = time.time() - self._last_seen
@@ -32,12 +33,19 @@ class HostState(object):
                 if r == 0:
                     self.seen_alive()
             self._last_ping = time.time()
+        elif not self.is_alive and self._was_alive:
+            LOG.audit('Host %s is now assumed to be offline' % self._alias)
+            self._was_alive = False
 
     def seen_alive(self):
         last_seen_ago = '%i sec ago' % (time.time() - self._last_seen)
-        LOG.info('%s seen alive (since %s)' % (
-            self._alias, self._last_seen and last_seen_ago or 'never'))
+        if self._was_alive:
+            LOG.info('%s seen alive (since %s)' % (
+                self._alias, self._last_seen and last_seen_ago or 'never'))
+        else:
+            LOG.audit('%s is now assumed to be online' % self._alias)
         self._last_seen = time.time()
+        self._was_alive = True
 
     @property
     def is_alive(self):
@@ -146,6 +154,12 @@ def main():
     watches = dict([(host._ip, host) for host in hosts])
 
     logging.basicConfig(format='%(asctime)-15s %(levelname)s %(message)s')
+    logging.addLevelName(logging.INFO + 5, 'AUDIT')
+
+    def audit(self, message, *a, **k):
+        self._log(logging.INFO + 5, message, args, **k)
+    logging.Logger.audit = audit
+
     LOG = logging.getLogger()
 
     if options.debug:
