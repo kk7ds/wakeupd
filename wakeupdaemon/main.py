@@ -10,11 +10,17 @@ from wakeupdaemon import arp
 
 
 class HostState(object):
-    def __init__(self, ip, alias, interface=None, timeout=90):
+    def __init__(self, ip, alias, interface=None, timeout=90,
+                 onlyfrom=None):
         self._ip = ip
         self._alias = alias
         self._interface = interface
         self._timeout = timeout
+        self._onlyfrom = onlyfrom
+
+        LOG.debug('New host %s interface=%s timeout=%s onlyfrom=%s' % (
+            self._alias, self._interface, self._timeout, self._onlyfrom))
+
         self._last_seen = 0
         self._last_ping = 0
         self._was_alive = False
@@ -63,6 +69,10 @@ class HostState(object):
 
 class HostStateWOL(HostState):
     def wake(self, requester):
+        if self._onlyfrom and requester not in self._onlyfrom:
+            LOG.info('Not waking %s for requester %s' % (self._alias,
+                                                         requester))
+            return
         LOG.warning('Waking %s for %s with WOL' % (self._alias, requester))
         if self._interface:
             intfarg = '-i %s' % self._interface
@@ -102,10 +112,14 @@ def load_hosts_from_conf(conf):
         hosttype = safe(conf.get, hostdef, 'type', 'wol')
         if hosttype not in HOST_TYPES:
             raise Exception('Host %s has invalid type %s' % (name, hosttype))
+        onlyfrom = [x.strip() for x in safe(conf.get, hostdef, 'onlyfrom', ''
+                                        ).split(',')
+                    if x.strip()]
         state = HOST_TYPES[hosttype](
             conf.get(hostdef, 'ip'), name,
             interface=safe(conf.get, hostdef, 'interface', None),
-            timeout=safe(conf.getint, hostdef, 'timeout', 90))
+            timeout=safe(conf.getint, hostdef, 'timeout', 90),
+            onlyfrom=onlyfrom)
         hosts.append(state)
     return hosts
 
@@ -147,12 +161,6 @@ def main():
     if os.path.exists(conf_file):
         conf.read(conf_file)
 
-    hosts = load_hosts(conf, args)
-    if len(hosts) == 0:
-        print 'No hosts are defined'
-        return 1
-    watches = dict([(host._ip, host) for host in hosts])
-
     logging.basicConfig(format='%(asctime)-15s %(levelname)s %(message)s')
     logging.addLevelName(logging.INFO + 5, 'AUDIT')
 
@@ -168,6 +176,12 @@ def main():
         LOG.setLevel(logging.INFO)
     else:
         LOG.setLevel(logging.WARNING)
+
+    hosts = load_hosts(conf, args)
+    if len(hosts) == 0:
+        print 'No hosts are defined'
+        return 1
+    watches = dict([(host._ip, host) for host in hosts])
 
 
     sock = arp.ArpSocket()
@@ -185,6 +199,3 @@ def main():
                 watch = watches[f.fproto.target_ip]
                 if not watch.is_alive:
                     watch.wake(f.fproto.sender_ip)
-
-if __name__ == '__main__':
-    sys.exit(main())
